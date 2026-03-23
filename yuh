@@ -1,0 +1,2041 @@
+--[[
+    Leaf Hub | Cursed Gear Build v1.0.0
+    UI: Obsidian (https://github.com/deividcomsono/Obsidian)
+]]
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  TELEPORT PERSISTENCE (based on Infinite Yield's approach)
+-- ─────────────────────────────────────────────────────────────────────────────
+local SCRIPT_URL = "https://pastebin.com/raw/ajMg4dSX"
+
+local queueFn = nil
+pcall(function() if queue_on_teleport then queueFn = queue_on_teleport end end)
+pcall(function() if not queueFn and syn and syn.queue_on_teleport then queueFn = syn.queue_on_teleport end end)
+pcall(function() if not queueFn and fluxus and fluxus.queue_on_teleport then queueFn = fluxus.queue_on_teleport end end)
+
+local Players_ = game:GetService("Players")
+local LocalPlayer_ = Players_.LocalPlayer or Players_:GetPropertyChangedSignal("LocalPlayer"):Wait() and Players_.LocalPlayer
+if LocalPlayer_ then
+    LocalPlayer_.OnTeleport:Connect(function()
+        if queueFn then
+            pcall(queueFn, "shared.__LeafHubAutoload=true;loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()")
+        end
+    end)
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  Load Obsidian async so HttpGet never freezes the game
+-- ─────────────────────────────────────────────────────────────────────────────
+task.spawn(function()
+local repo         = "https://raw.githubusercontent.com/deividcomsono/Obsidian/main/"
+local Library      = loadstring(game:HttpGet(repo .. "Library.lua"))()
+local SaveManager  = loadstring(game:HttpGet(repo .. "addons/SaveManager.lua"))()
+local ThemeManager = loadstring(game:HttpGet(repo .. "addons/ThemeManager.lua"))()
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  Services
+-- ─────────────────────────────────────────────────────────────────────────────
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local Lighting         = game:GetService("Lighting")
+local TweenService     = game:GetService("TweenService")
+
+local LocalPlayer = Players.LocalPlayer
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  Helpers
+-- ─────────────────────────────────────────────────────────────────────────────
+local function getChar()   return LocalPlayer.Character end
+local function getHRP()    local c = getChar(); return c and c:FindFirstChild("HumanoidRootPart") end
+local function getHuman()  local c = getChar(); return c and c:FindFirstChildOfClass("Humanoid") end
+local function tog(k)      local t = Library.Toggles[k]; return t and t.Value end
+local function opt(k)      local o = Library.Options[k];  return o and o.Value end
+
+-- Clean mob name: strip leading dot and trailing number e.g. ".CrabMonster12" -> "CrabMonster"
+local function cleanMobName(raw)
+    local s = raw:gsub("^%.", "")    -- remove leading dot
+    s = s:gsub("%d+$", "")           -- remove trailing digits
+    s = s:gsub("%s+$", "")           -- trim trailing space
+    return s ~= "" and s or raw
+end
+
+-- Safe teleport with a tiny upward offset so we don't clip into floors
+local function safeTeleport(pos)
+    local hrp = getHRP()
+    if not hrp then return end
+    hrp.CFrame = CFrame.new(pos + Vector3.new(0, 3, 0))
+end
+
+-- Get pivot/position from any instance (model or part)
+local function getPosition(inst)
+    if not inst or not inst.Parent then return nil end
+    local ok, pos = pcall(function()
+        if inst:IsA("BasePart") then
+            return inst.Position
+        elseif inst:IsA("Model") then
+            return inst:GetPivot().Position
+        end
+    end)
+    return ok and pos or nil
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  Window
+-- ─────────────────────────────────────────────────────────────────────────────
+local Window = Library:CreateWindow({
+    Title    = "Leaf Hub",
+    Footer   = "Cursed Gear Build v1.0.0",
+    Center   = true,
+    AutoShow = true,
+})
+
+-- If this is an autoload after teleport, start with the window hidden
+if shared.__LeafHubAutoload then
+    shared.__LeafHubAutoload = nil
+    task.defer(function() Window:Toggle() end)
+end
+
+local Tabs = {
+    Movement = Window:AddTab("Movement",  "move"),
+    Game     = Window:AddTab("Game",      "gamepad-2"),
+    Visuals  = Window:AddTab("Visuals",   "eye"),
+    Auto     = Window:AddTab("Auto",      "zap"),
+    Combat   = Window:AddTab("Combat",    "sword"),
+    Settings = Window:AddTab("Settings",  "settings"),
+}
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  Watermark
+-- ─────────────────────────────────────────────────────────────────────────────
+local DLabel = Library:AddDraggableLabel("Leaf Hub | Cursed Gear Build v1.0.0")
+local wTimer, wCount, wFPS = tick(), 0, 60
+RunService.RenderStepped:Connect(function()
+    wCount += 1
+    if tick() - wTimer >= 1 then wFPS = wCount; wTimer = tick(); wCount = 0 end
+    local ping = 0
+    pcall(function()
+        ping = math.floor(game:GetService("Stats").Network.ServerStatsItem["Data Ping"]:GetValue())
+    end)
+    DLabel:SetText(("Leaf Hub | v1.0.0 | %d fps | %d ms"):format(wFPS, ping))
+end)
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  MOVEMENT TAB
+-- ═════════════════════════════════════════════════════════════════════════════
+local FlyBox    = Tabs.Movement:AddLeftGroupbox("Fly")
+local NoclipBox = Tabs.Movement:AddLeftGroupbox("NoClip")
+local SpeedBox  = Tabs.Movement:AddRightGroupbox("Speed")
+local JumpBox   = Tabs.Movement:AddRightGroupbox("Jump")
+
+-- ── Fly ──────────────────────────────────────────────────────────────────────
+local FlyT = FlyBox:AddToggle("Fly", { Text = "Fly", Default = false, Tooltip = "BodyVelocity-based fly. Hold C to go down." })
+FlyT:AddKeyPicker("FlyKeybind", { Default = "N/A", SyncToggleState = true, Text = "Fly" })
+FlyBox:AddSlider("FlySpeed",   { Text = "Fly Speed",         Default = 200, Min = 0, Max = 450, Suffix = "/s", Rounding = 0 })
+FlyBox:AddSlider("FlyUpSpeed", { Text = "Spacebar Up Speed", Default = 150, Min = 0, Max = 450, Suffix = "/s", Rounding = 0 })
+
+-- ── NoClip ────────────────────────────────────────────────────────────────────
+local NcT = NoclipBox:AddToggle("NoClip", { Text = "NoClip", Default = false, Tooltip = "Disable character collisions." })
+NcT:AddKeyPicker("NoClipKeybind", { Default = "N/A", SyncToggleState = true, Text = "NoClip" })
+NoclipBox:AddToggle("NoClipKnocked", { Text = "Collisions While Knocked", Default = false, Tooltip = "Re-enable collisions while knocked." })
+
+-- ── Speed ─────────────────────────────────────────────────────────────────────
+local ShT = SpeedBox:AddToggle("Speedhack", { Text = "Speedhack", Default = false, Tooltip = "Boost velocity while moving." })
+ShT:AddKeyPicker("SpeedhackKeybind", { Default = "N/A", SyncToggleState = true, Text = "Speedhack" })
+SpeedBox:AddSlider("SpeedhackSpeed", { Text = "Speed", Default = 200, Min = 0, Max = 300, Suffix = "/s", Rounding = 0 })
+
+local CfT = SpeedBox:AddToggle("CFrameSpeed", { Text = "CFrame Speed", Default = false, Tooltip = "Smooth CFrame-based movement boost." })
+CfT:AddKeyPicker("CFrameSpeedKeybind", { Default = "N/A", SyncToggleState = true, Text = "CFrame Speed" })
+SpeedBox:AddSlider("CFrameSpeedMult", { Text = "Multiplier", Default = 1, Min = 1, Max = 20, Suffix = "x", Rounding = 1 })
+
+-- ── Jump ──────────────────────────────────────────────────────────────────────
+local IjT = JumpBox:AddToggle("InfiniteJump", { Text = "Infinite Jump", Default = false, Tooltip = "Boosts velocity on every Space press." })
+IjT:AddKeyPicker("InfiniteJumpKeybind", { Default = "N/A", SyncToggleState = true, Text = "Infinite Jump" })
+JumpBox:AddSlider("InfiniteJumpBoost", { Text = "Jump Boost", Default = 50, Min = 0, Max = 500, Suffix = "/s", Rounding = 0 })
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  GAME TAB
+-- ═════════════════════════════════════════════════════════════════════════════
+local EffBox  = Tabs.Game:AddLeftGroupbox("Effect Removals")
+local InstBox = Tabs.Game:AddLeftGroupbox("Instance Removals")
+local MobBox  = Tabs.Game:AddRightGroupbox("Mob Exploits")
+
+-- Effect Removals
+EffBox:AddToggle("NoStun",        { Text = "No Stun",          Default = false, Tooltip = "Remove Stun effects." })
+EffBox:AddToggle("NoSpeedDebuff", { Text = "No Speed Debuff",  Default = false, Tooltip = "Remove Speed Debuff effects." })
+local NfdT = EffBox:AddToggle("NoFallDamage", { Text = "No Fall Damage", Default = false })
+NfdT:AddKeyPicker("NoFallDamageKeybind", { Default = "N/A", SyncToggleState = true, Text = "No Fall Damage" })
+EffBox:AddToggle("NoWind",          { Text = "No Wind",          Default = false })
+EffBox:AddToggle("AlwaysAllowJump", { Text = "Always Allow Jump", Default = false })
+
+-- Instance Removals
+InstBox:AddToggle("NoKillBricks",   { Text = "No Kill Bricks",   Default = false, Tooltip = "Teleport kill bricks away." })
+InstBox:AddToggle("NoDamageBricks", { Text = "No Damage Bricks", Default = false, Tooltip = "Remove damage brick parts." })
+
+-- Mob Exploits
+local PbT = MobBox:AddToggle("PathfindBreaker", { Text = "Pathfind Breaker", Default = false, Tooltip = "Spoof vertical velocity to break mob AI." })
+PbT:AddKeyPicker("PathfindBreakerKeybind", { Default = "N/A", SyncToggleState = true, Text = "Pathfind Breaker" })
+MobBox:AddToggle("AggressiveMode", { Text = "Aggressive Mode", Default = false })
+local HlT = MobBox:AddToggle("PBHighlight", { Text = "Show Highlight", Default = false })
+HlT:AddColorPicker("PBHighlightColor",        { Default = Color3.fromRGB(200, 0, 255),   Title = "Highlight Color" })
+HlT:AddColorPicker("PBHighlightOutlineColor", { Default = Color3.fromRGB(255, 152, 234), Title = "Outline Color" })
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  VISUALS TAB
+-- ═════════════════════════════════════════════════════════════════════════════
+local VremBox = Tabs.Visuals:AddLeftGroupbox("Visual Removals")
+local PespBox = Tabs.Visuals:AddLeftGroupbox("Player ESP")
+local MespBox = Tabs.Visuals:AddRightGroupbox("Mob ESP")      -- mobs in workspace.Live
+local NespBox = Tabs.Visuals:AddRightGroupbox("NPC ESP")      -- passive NPCs (non-mob)
+
+-- Visual Removals
+VremBox:AddToggle("NoFog",        { Text = "No Fog",        Default = false })
+VremBox:AddToggle("NoBlur",       { Text = "No Blur",        Default = false })
+VremBox:AddToggle("NoShadows",    { Text = "No Shadows",     Default = false })
+VremBox:AddToggle("Fullbright",   { Text = "Fullbright",     Default = false, Tooltip = "Sets ambient and outdoor ambient to full white so everything is fully lit." })
+
+-- ── Player ESP ────────────────────────────────────────────────────────────────
+local PespT = PespBox:AddToggle("PlayerESP", { Text = "Enable Player ESP", Default = false })
+PespT:AddColorPicker("PlayerESPColor", { Default = Color3.fromRGB(255, 80, 80), Title = "ESP Color" })
+PespT:AddKeyPicker("PlayerESPKeybind", { Default = "N/A", SyncToggleState = true, Text = "Player ESP" })
+PespBox:AddToggle("PlayerESPName",      { Text = "Show Name",    Default = true })
+PespBox:AddToggle("PlayerESPDistance",  { Text = "Show Distance",Default = true })
+PespBox:AddToggle("PlayerESPHealthBar", { Text = "Health Bar",   Default = true })
+PespBox:AddToggle("PlayerESPBox",       { Text = "Bounding Box", Default = true })
+PespBox:AddToggle("PlayerESPTracers",   { Text = "Tracers",      Default = false })
+PespBox:AddSlider("PlayerESPMaxDist",   { Text = "Max Distance", Default = 2000, Min = 0, Max = 10000, Suffix = " studs", Rounding = 0 })
+PespBox:AddDropdown("PlayerESPNameType", { Text = "Name Type", Default = 1, Values = { "Display Name", "Username" } })
+local AllyT = PespBox:AddToggle("PlayerESPMarkAllies", { Text = "Mark Allies", Default = false })
+AllyT:AddColorPicker("PlayerESPAllyColor", { Default = Color3.fromRGB(80, 200, 80), Title = "Ally Color" })
+
+-- ── Mob ESP (workspace.Live — names start with "." or end with digits) ────────
+local MespT = MespBox:AddToggle("MobESP", { Text = "Enable Mob ESP", Default = false })
+MespT:AddColorPicker("MobESPColor", { Default = Color3.fromRGB(255, 80, 40), Title = "ESP Color" })
+MespT:AddKeyPicker("MobESPKeybind", { Default = "N/A", SyncToggleState = true, Text = "Mob ESP" })
+MespBox:AddToggle("MobESPName",      { Text = "Show Name",    Default = true })
+MespBox:AddToggle("MobESPDistance",  { Text = "Show Distance",Default = true })
+MespBox:AddToggle("MobESPHealthBar", { Text = "Health Bar",   Default = true })
+MespBox:AddToggle("MobESPBox",       { Text = "Bounding Box", Default = true })
+MespBox:AddToggle("MobESPTracers",   { Text = "Tracers",      Default = false })
+MespBox:AddSlider("MobESPMaxDist",   { Text = "Max Distance", Default = 1500, Min = 0, Max = 10000, Suffix = " studs", Rounding = 0 })
+
+-- ── NPC ESP (workspace.Live — non-mob NPCs, no dot/digit name pattern) ────────
+local NespT = NespBox:AddToggle("NPCESP", { Text = "Enable NPC ESP", Default = false })
+NespT:AddColorPicker("NPCESPColor", { Default = Color3.fromRGB(100, 180, 255), Title = "ESP Color" })
+NespT:AddKeyPicker("NPCESPKeybind", { Default = "N/A", SyncToggleState = true, Text = "NPC ESP" })
+NespBox:AddToggle("NPCESPName",      { Text = "Show Name",    Default = true })
+NespBox:AddToggle("NPCESPDistance",  { Text = "Show Distance",Default = true })
+NespBox:AddToggle("NPCESPHealthBar", { Text = "Health Bar",   Default = false })
+NespBox:AddToggle("NPCESPBox",       { Text = "Bounding Box", Default = true })
+NespBox:AddToggle("NPCESPTracers",   { Text = "Tracers",      Default = false })
+NespBox:AddSlider("NPCESPMaxDist",   { Text = "Max Distance", Default = 1500, Min = 0, Max = 10000, Suffix = " studs", Rounding = 0 })
+
+-- ── Exit ESP ──────────────────────────────────────────────────────────────────
+local ExitESPBox = Tabs.Visuals:AddLeftGroupbox("Exit ESP")
+local ExitT = ExitESPBox:AddToggle("ExitESP", { Text = "Enable Exit ESP", Default = false, Tooltip = "Shows nearby zone exits with name and distance labels." })
+ExitT:AddColorPicker("ExitESPColor", { Default = Color3.fromRGB(80, 255, 180), Title = "ESP Color" })
+ExitESPBox:AddToggle("ExitESPDistance", { Text = "Show Distance", Default = true })
+ExitESPBox:AddToggle("ExitESPTracers",  { Text = "Tracers",       Default = false })
+ExitESPBox:AddSlider("ExitESPMaxDist",  { Text = "Max Distance", Default = 5000, Min = 0, Max = 20000, Suffix = " studs", Rounding = 0 })
+
+-- ── Item ESP ──────────────────────────────────────────────────────────────────
+local ItemESPBox = Tabs.Visuals:AddRightGroupbox("Item ESP")
+
+local CacheESPT = ItemESPBox:AddToggle("CacheESP", { Text = "Cache ESP", Default = false })
+CacheESPT:AddColorPicker("CacheESPColor", { Default = Color3.fromRGB(255, 220, 50), Title = "Cache Color" })
+
+local TrinketESPT = ItemESPBox:AddToggle("TrinketESP", { Text = "Trinket ESP", Default = false })
+TrinketESPT:AddColorPicker("TrinketESPColor", { Default = Color3.fromRGB(180, 100, 255), Title = "Trinket Color" })
+
+local VeilESPT = ItemESPBox:AddToggle("VeilESP", { Text = "Veil ESP", Default = false })
+VeilESPT:AddColorPicker("VeilESPColor", { Default = Color3.fromRGB(255, 100, 220), Title = "Veil Color" })
+
+ItemESPBox:AddToggle("ItemESPDistance", { Text = "Show Distance", Default = true })
+ItemESPBox:AddToggle("ItemESPTracers",  { Text = "Tracers",       Default = false })
+ItemESPBox:AddSlider("ItemESPMaxDist",  { Text = "Max Distance",  Default = 3000, Min = 0, Max = 10000, Suffix = " studs", Rounding = 0 })
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  AUTO TAB
+-- ═════════════════════════════════════════════════════════════════════════════
+local AutoFarmBox = Tabs.Auto:AddLeftGroupbox("Farming")
+local AutoTPBox   = Tabs.Auto:AddRightGroupbox("Teleports")
+
+-- ── Cycling helper ────────────────────────────────────────────────────────────
+-- Caches the list on first press, advances one item per press, rescans when
+-- exhausted. Each cycler is its own closure with independent state.
+local function makeCycler(label, getList, getPosFn)
+    local list   = {}
+    local cursor = 0
+
+    return function()
+        if cursor <= 0 or cursor > #list then
+            list   = getList()
+            cursor = 1
+            if #list == 0 then
+                Library:Notify(label .. " — nothing found!", 3)
+                return
+            end
+        end
+
+        -- Skip stale (removed) entries
+        while cursor <= #list and not (list[cursor] and list[cursor].Parent) do
+            cursor += 1
+        end
+
+        if cursor > #list then
+            cursor = 0
+            Library:Notify(label .. " — list exhausted, rescanning next press.", 3)
+            return
+        end
+
+        local pos = getPosFn(list[cursor])
+        if pos then
+            safeTeleport(pos)
+            Library:Notify(("%s  %d / %d"):format(label, cursor, #list), 2)
+        end
+        cursor += 1
+    end
+end
+
+-- ── Auto Loot Farm (workspace.LootFolder > "Loot" parts) ─────────────────────
+AutoFarmBox:AddToggle("AutoLoot", {
+    Text    = "Auto Loot Farm",
+    Default = false,
+    Tooltip = "Loops through workspace.LootFolder > Loot: TP → press X → wait → next.",
+})
+AutoFarmBox:AddSlider("AutoLootDelay", {
+    Text = "Loot Delay", Default = 1, Min = 0.2, Max = 5, Suffix = "s", Rounding = 1,
+})
+
+-- ── Collect Trinkets ─────────────────────────────────────────────────────────
+-- Collects OreoOre parts (in workspace) and Loot parts directly in workspace
+AutoFarmBox:AddToggle("AutoTrinkets", {
+    Text    = "Collect Trinkets",
+    Default = false,
+    Tooltip = "Loops through OreoOre and Loot parts directly in workspace: TP → press X → wait → next.",
+})
+AutoFarmBox:AddSlider("AutoTrinketDelay", {
+    Text = "Trinket Delay", Default = 0.8, Min = 0.2, Max = 5, Suffix = "s", Rounding = 1,
+})
+
+-- ── VeilSpot cycler (workspace.VeilSpots > "Spot" parts) ─────────────────────
+local cycleVeilSpot = makeCycler(
+    "VeilSpot",
+    function()
+        -- Try both spellings just in case
+        local folder = workspace:FindFirstChild("VeilSpots")
+                    or workspace:FindFirstChild("VielSpots")
+        if not folder then return {} end
+        local t = {}
+        for _, v in ipairs(folder:GetChildren()) do
+            if v:IsA("BasePart") and v.Name == "Spot" then
+                table.insert(t, v)
+            end
+        end
+        return t
+    end,
+    function(v) return v.Position end
+)
+AutoTPBox:AddButton("TP to VeilSpot", cycleVeilSpot)
+
+-- ── Cache cycler (workspace.Thrown > "itemCacheModel" models) ────────────────
+local cycleCaches = makeCycler(
+    "Cache",
+    function()
+        local thrown = workspace:FindFirstChild("Thrown")
+        if not thrown then return {} end
+        local t = {}
+        for _, v in ipairs(thrown:GetChildren()) do
+            if v:IsA("Model") and v.Name == "itemCacheModel" then table.insert(t, v) end
+        end
+        return t
+    end,
+    function(v) return getPosition(v) end
+)
+AutoTPBox:AddButton("TP to Cache", cycleCaches)
+
+-- ── Reward Bezier cycler (workspace.Thrown > "rewardBezier" models) ──────────
+local cycleRewards = makeCycler(
+    "Reward Bezier",
+    function()
+        local thrown = workspace:FindFirstChild("Thrown")
+        if not thrown then return {} end
+        local t = {}
+        for _, v in ipairs(thrown:GetChildren()) do
+            if v:IsA("Model") and v.Name == "rewardBezier" then table.insert(t, v) end
+        end
+        return t
+    end,
+    function(v) return getPosition(v) end
+)
+AutoTPBox:AddButton("TP to Reward Bezier", cycleRewards)
+
+-- ── Exit teleport (workspace.MapStuff.Map.Spawns > nearest "Exit" part) ───────
+AutoTPBox:AddButton("TP to Exit", function()
+    local mapStuff = workspace:FindFirstChild("MapStuff")
+    local map      = mapStuff and mapStuff:FindFirstChild("Map")
+    local spawns   = map and map:FindFirstChild("Spawns")
+    if not spawns then Library:Notify("Spawns folder not found!", 3); return end
+    local exits = {}
+    for _, v in ipairs(spawns:GetChildren()) do
+        if v:IsA("BasePart") and v.Name == "Exit" then table.insert(exits, v) end
+    end
+    if #exits == 0 then Library:Notify("No Exit parts found!", 3); return end
+    local hrp    = getHRP()
+    local target = exits[1]
+    if hrp and #exits > 1 then
+        local minDist = math.huge
+        for _, e in ipairs(exits) do
+            local d = (hrp.Position - e.Position).Magnitude
+            if d < minDist then minDist = d; target = e end
+        end
+    end
+    safeTeleport(target.Position)
+    Library:Notify("Teleported to Exit!", 2)
+end)
+
+-- ── Hidden Curse cycler (any model in workspace with a "VeilHighlight" child) ──
+-- These are curse quest objectives — cycle through them one per press.
+local cycleHiddenCurses = makeCycler(
+    "Hidden Curse",
+    function()
+        local t = {}
+        -- Search all workspace descendants for models containing a VeilHighlight
+        for _, v in ipairs(workspace:GetDescendants()) do
+            if v:IsA("Highlight") and v.Name == "VeilHighlight" then
+                -- The model is the parent of the highlight
+                local model = v.Parent
+                if model and model:IsA("Model") then
+                    -- Avoid duplicates
+                    local already = false
+                    for _, existing in ipairs(t) do
+                        if existing == model then already = true; break end
+                    end
+                    if not already then table.insert(t, model) end
+                end
+            end
+        end
+        return t
+    end,
+    function(v) return getPosition(v) end
+)
+AutoTPBox:AddButton("TP to Hidden Curse", cycleHiddenCurses)
+
+-- ── Auto Raid ─────────────────────────────────────────────────────────────────
+local RaidBox = Tabs.Auto:AddLeftGroupbox("Auto Raid")
+
+RaidBox:AddToggle("AutoRaid", {
+    Text    = "Auto Raid",
+    Default = false,
+    Tooltip = "Creates party, enters raid, navigates to extraction point automatically.",
+})
+RaidBox:AddSlider("RaidMoveDelay", {
+    Text    = "Move Delay",
+    Default = 2,
+    Min     = 0.5,
+    Max     = 10,
+    Suffix  = "s",
+    Rounding = 1,
+    Tooltip  = "How long to wait at each exit before moving on.",
+})
+local RaidStatusLabel = RaidBox:AddLabel("Status: Idle")
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  AUTO RAID SYSTEM
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- Map: PlaceId -> location data with name and exits
+local RAID_MAP = {
+    [13593513411] = {
+        name = "Haven Pitstop",
+        exits = {
+            { pos = Vector3.new(-525.4, 13.0, 1574),   dest = "Sunset Freeway"   },
+            { pos = Vector3.new(-330.5, 11.2, 330),    dest = "Shibuya Crossing" },
+        },
+    },
+    [15002638400] = {
+        name = "Shibuya Crossing",
+        aliases = { "Neo Shibuya", "Shibuya" },
+        exits = {
+            { pos = Vector3.new(-678.2, 5.4, -477.6),  dest = "Haven Pitstop" },
+        },
+    },
+    [76385487794583] = {
+        name = "Sunset Freeway",
+        exits = {
+            { pos = Vector3.new(-328.3, 69.0, -344),   dest = "Haven Pitstop" },
+            { pos = Vector3.new(-183,   228.9, 558.2), dest = "Boom Beach"    },
+            { pos = Vector3.new(1231.7, 228.9, 184.0), dest = "Mist Valley"   },
+        },
+    },
+    [13769565263] = {
+        name = "Boom Beach",
+        exits = {
+            { pos = Vector3.new(-7.5,   -4.6,  791.9), dest = "Sunset Freeway"  },
+            { pos = Vector3.new(98.1,   32.0,  1614.7),dest = "Pale District"   },
+            { pos = Vector3.new(-63.5, -15.0,  -4.1),  dest = "Emerald Glen"    },
+            { pos = Vector3.new(542.7, -207.7, -94.2), dest = "Windswept Cove"  },
+        },
+    },
+    [16965267768] = {
+        name = "Pale District",
+        exits = {
+            { pos = Vector3.new(-1778.0, 3.9, 293.3),  dest = "Boom Beach" },
+        },
+    },
+    [14147726326] = {
+        name = "Emerald Glen",
+        exits = {
+            { pos = Vector3.new(319.2,  103.7, 194.7), dest = "Boom Beach"      },
+            { pos = Vector3.new(-121.8, 184.2, -539.5),dest = "Windswept Cove"  },
+            { pos = Vector3.new(-433.1, 178.2, 148.7), dest = "Mist Valley"     },
+        },
+    },
+    [13968502857] = {
+        name = "Mist Valley",
+        exits = {
+            { pos = Vector3.new(4882.4, 697.0, -2029.0), dest = "Emerald Glen"    },
+            { pos = Vector3.new(3649.4, 693.0, -2762.4), dest = "Windswept Cove"  },
+            { pos = Vector3.new(4900.8, 619.9, -336.6),  dest = "Sunset Freeway"  },
+        },
+    },
+    [15023035886] = {
+        name = "Windswept Cove",
+        exits = {
+            { pos = Vector3.new(903.1, 233.0, -1096.2),  dest = "Mist Valley"  },
+            { pos = Vector3.new(936.3, 168.8, -1559.2),  dest = "Emerald Glen" },
+            { pos = Vector3.new(771.4, 159.7, -1625.5),  dest = "Boom Beach"   },
+        },
+    },
+    -- Lobby
+    [16451246228] = {
+        name = "Lobby",
+        exits = {},
+    },
+}
+
+local LOBBY_PLACE_ID = 16451246228
+
+-- Match a quest title string to a location name (handles aliases and partial matches)
+local function matchLocation(titleStr)
+    if not titleStr or titleStr == "" then return nil end
+    local lower = titleStr:lower()
+    -- Extract destination from "Extraction Point: X" format
+    local dest = lower:match("extraction point:%s*(.+)") or lower
+    dest = dest:gsub("%s+$", "")
+
+    for placeId, loc in pairs(RAID_MAP) do
+        if loc.name:lower():find(dest, 1, true) or dest:find(loc.name:lower(), 1, true) then
+            return placeId, loc
+        end
+        if loc.aliases then
+            for _, alias in ipairs(loc.aliases) do
+                if alias:lower():find(dest, 1, true) or dest:find(alias:lower(), 1, true) then
+                    return placeId, loc
+                end
+            end
+        end
+    end
+    return nil
+end
+
+-- Get the extraction target from QuestUI
+local function getExtractionTarget()
+    local playerGui = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not playerGui then return nil end
+
+    local questUI = playerGui:FindFirstChild("QuestUI")
+    if not questUI then return nil end
+
+    local questFrame = questUI:FindFirstChild("Quest")
+    if not questFrame then return nil end
+
+    -- Search all TextLabels named "Title" in Header frames
+    for _, child in ipairs(questFrame:GetChildren()) do
+        local header = child:FindFirstChild("Header")
+        if header then
+            local title = header:FindFirstChild("Title")
+            if title and title:IsA("TextLabel") then
+                local text = title.Text
+                if text and text ~= "" then
+                    -- Match "Extraction Point: <Location>"
+                    if text:lower():find("extraction") then
+                        return text
+                    end
+                end
+            end
+        end
+    end
+
+    -- Fallback: also check QuestTemplate directly
+    local template = questFrame:FindFirstChild("QuestTemplate")
+    if template then
+        local header = template:FindFirstChild("Header")
+        local title  = header and header:FindFirstChild("Title")
+        if title and title.Text ~= "" then return title.Text end
+    end
+
+    return nil
+end
+
+-- Find the exit from current location heading toward a destination
+local function findExitToward(currentPlaceId, destName)
+    local loc = RAID_MAP[currentPlaceId]
+    if not loc then return nil end
+
+    local destLower = destName:lower()
+
+    -- Direct exit to destination
+    for _, exit in ipairs(loc.exits) do
+        if exit.dest:lower():find(destLower, 1, true) or destLower:find(exit.dest:lower(), 1, true) then
+            return exit
+        end
+    end
+
+    -- BFS to find path through the map
+    local queue   = { { id = currentPlaceId, path = {} } }
+    local visited = { [currentPlaceId] = true }
+    while #queue > 0 do
+        local node = table.remove(queue, 1)
+        local nodeLoc = RAID_MAP[node.id]
+        if nodeLoc then
+            for _, exit in ipairs(nodeLoc.exits) do
+                -- Find placeId of dest
+                local nextId = nil
+                for pid, ploc in pairs(RAID_MAP) do
+                    if ploc.name:lower() == exit.dest:lower() then
+                        nextId = pid; break
+                    end
+                    if ploc.aliases then
+                        for _, alias in ipairs(ploc.aliases) do
+                            if alias:lower() == exit.dest:lower() then nextId = pid; break end
+                        end
+                    end
+                end
+                if nextId and not visited[nextId] then
+                    local newPath = {}
+                    for _, e in ipairs(node.path) do table.insert(newPath, e) end
+                    table.insert(newPath, exit)
+
+                    -- Check if this node's exits lead to destination
+                    local nextLoc = RAID_MAP[nextId]
+                    if nextLoc then
+                        if nextLoc.name:lower():find(destLower, 1, true) or destLower:find(nextLoc.name:lower(), 1, true) then
+                            -- Return the first exit in the path
+                            return newPath[1]
+                        end
+                        if nextLoc.aliases then
+                            for _, alias in ipairs(nextLoc.aliases) do
+                                if alias:lower():find(destLower, 1, true) then
+                                    return newPath[1]
+                                end
+                            end
+                        end
+                    end
+
+                    visited[nextId] = true
+                    table.insert(queue, { id = nextId, path = newPath })
+                end
+            end
+        end
+    end
+
+    -- No path found — just return first exit as fallback
+    if #loc.exits > 0 then return loc.exits[1] end
+    return nil
+end
+
+-- Spam the travel story + choice remotes during loading screens
+local function spamTransitionRemotes(duration)
+    local RS = game:GetService("ReplicatedStorage")
+    local deadline = tick() + duration
+    local stories = {
+        "Lets hope it can bring safe travels - Make a prayer",
+        "Keep moving forward",
+        "Stay sharp",
+    }
+    local storyIdx = 1
+
+    while tick() < deadline do
+        -- TravelStory remote
+        pcall(function()
+            local r = RS:FindFirstChild("Requests")
+            if r then
+                local ts = r:FindFirstChild("TravelStory")
+                if ts then ts:FireServer(stories[storyIdx]) end
+                storyIdx = (storyIdx % #stories) + 1
+            end
+        end)
+
+        -- Choice remote (dismisses selection screens)
+        pcall(function()
+            local choice = RS:FindFirstChild("Choice") or
+                           (RS:FindFirstChild("Requests") and RS.Requests:FindFirstChild("Choice"))
+            if choice then choice:FireServer(false) end
+        end)
+
+        -- Also press L key
+        pcall(function()
+            if isrbxactive and not isrbxactive() then return end
+            keypress(0x4C); task.wait(0.05); keyrelease(0x4C)
+        end)
+        pcall(function()
+            local vu = game:GetService("VirtualUser")
+            vu:CaptureController(); vu:KeyDown("l"); task.wait(0.05); vu:KeyUp("l")
+        end)
+
+        task.wait(0.2)
+    end
+end
+
+local function setRaidStatus(msg)
+    pcall(function() RaidStatusLabel:SetText("Status: " .. msg) end)
+    Library:Notify("[Auto Raid] " .. msg, 3)
+    print("[Auto Raid]", msg)
+end
+
+-- Main Auto Raid loop
+task.spawn(function()
+    while true do
+        task.wait(0.5)
+        if not tog("AutoRaid") then continue end
+
+        local currentPlaceId = game.PlaceId
+
+        -- ── LOBBY PHASE ───────────────────────────────────────────────────────
+        if currentPlaceId == LOBBY_PLACE_ID then
+            setRaidStatus("In lobby — creating party...")
+            task.wait(2)
+
+            -- Create squad
+            pcall(function()
+                local RS = game:GetService("ReplicatedStorage")
+                local createSquad = RS.Requests:FindFirstChild("CreateSquad")
+                if createSquad then
+                    createSquad:InvokeServer("Leaf Hub Party")
+                end
+            end)
+
+            task.wait(2)
+            setRaidStatus("Teleporting to Pods...")
+
+            -- Teleport to center of Pods folder (inside TrueHeadquarters Platform model)
+            local platform = workspace:FindFirstChild("TrueHeadquarters Platform")
+            local pods = platform and platform:FindFirstChild("Pods")
+                      or workspace:FindFirstChild("Pods") -- fallback direct
+            if pods then
+                local parts = pods:GetChildren()
+                if #parts > 0 then
+                    local sum   = Vector3.new(0, 0, 0)
+                    local count = 0
+                    for _, p in ipairs(parts) do
+                        local pos = getPosition(p)
+                        if pos then sum += pos; count += 1 end
+                    end
+                    if count > 0 then
+                        safeTeleport(sum / count)
+                    else
+                        local pos = getPosition(parts[1])
+                        if pos then safeTeleport(pos) end
+                    end
+                end
+            else
+                setRaidStatus("Pods not found in TrueHeadquarters Platform!")
+            end
+
+            task.wait(2)
+            -- Spam transition remotes while we wait to load into raid
+            setRaidStatus("Loading into raid...")
+            spamTransitionRemotes(10)
+
+            continue
+        end
+
+        -- ── RAID PHASE ────────────────────────────────────────────────────────
+        local raidLoc = RAID_MAP[currentPlaceId]
+        if not raidLoc then
+            setRaidStatus("Unknown place (" .. tostring(currentPlaceId) .. ")")
+            task.wait(5)
+            continue
+        end
+
+        -- Spam transition remotes briefly at start of each place load
+        spamTransitionRemotes(3)
+
+        -- Read extraction target from QuestUI
+        local extractionTitle = nil
+        local waitStart = tick()
+        while not extractionTitle and tick() - waitStart < 15 do
+            extractionTitle = getExtractionTarget()
+            if not extractionTitle then task.wait(1) end
+        end
+
+        if not extractionTitle then
+            setRaidStatus("Could not find extraction target!")
+            task.wait(5)
+            continue
+        end
+
+        setRaidStatus("Target: " .. extractionTitle)
+        task.wait(1)
+
+        -- Are we already at the extraction location?
+        local destPlaceId, destLoc = matchLocation(extractionTitle)
+        if destPlaceId and destPlaceId == currentPlaceId then
+            setRaidStatus("At extraction! Done.")
+            Library.Toggles.AutoRaid:SetValue(false)
+            continue
+        end
+
+        -- Find which exit to take
+        local exit = findExitToward(currentPlaceId, extractionTitle:match(":%s*(.+)") or extractionTitle)
+        if not exit then
+            setRaidStatus("No path to " .. extractionTitle)
+            task.wait(5)
+            continue
+        end
+
+        setRaidStatus("Moving to " .. exit.dest .. " exit...")
+        safeTeleport(exit.pos)
+        task.wait(opt("RaidMoveDelay") or 2)
+
+        -- Spam transition remotes as we go through the exit
+        spamTransitionRemotes(5)
+    end
+end)
+local CombatLeft = Tabs.Combat:AddLeftGroupbox("Curse")
+
+local CurseT = CombatLeft:AddToggle("AutoCurse", {
+    Text    = "Auto Curse M1s",
+    Default = false,
+    Tooltip = "Fires Curse + simulates E on the first M1 of a combo, CurseOff after.",
+})
+CombatLeft:AddSlider("CurseComboWindow", {
+    Text    = "Combo Window",
+    Default = 1.5,
+    Min     = 0.5,
+    Max     = 5.0,
+    Suffix  = "s",
+    Rounding = 1,
+    Tooltip = "How long after the first M1 before Curse can trigger again. Set higher to only curse once per full combo.",
+})
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  SETTINGS TAB
+-- ═════════════════════════════════════════════════════════════════════════════
+local SettLeft  = Tabs.Settings:AddLeftGroupbox("Cheat Settings")
+local SettRight = Tabs.Settings:AddRightGroupbox("UI Settings")
+
+SettLeft:AddButton("Unload Script", function() Library:Unload() end)
+
+SettRight:AddLabel("Menu Bind"):AddKeyPicker("MenuKeybind", {
+    Default = "RightShift", NoUI = true, Text = "Menu Keybind",
+})
+Library.ToggleKeybind = Library.Options.MenuKeybind
+
+SaveManager:SetLibrary(Library)
+SaveManager:IgnoreThemeSettings()
+SaveManager:SetIgnoreIndexes({ "MenuKeybind", "Fly", "NoClip", "Speedhack", "InfiniteJump" })
+SaveManager:SetFolder("LeafHub")
+SaveManager:BuildConfigSection(Tabs.Settings)
+
+ThemeManager:SetLibrary(Library)
+ThemeManager:SetFolder("LeafHub-Themes")
+ThemeManager:ApplyToTab(Tabs.Settings)
+
+SaveManager:LoadAutoloadConfig()
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  FEATURE STATE
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- Saved lighting originals
+local origFogStart = Lighting.FogStart
+local origFogEnd   = Lighting.FogEnd
+local origShadows  = Lighting.GlobalShadows
+local origAtmoDens = nil
+do local a = Lighting:FindFirstChildOfClass("Atmosphere"); if a then origAtmoDens = a.Density end end
+local origBlurSizes = {}
+for _, v in ipairs(Lighting:GetChildren()) do
+    if v:IsA("BlurEffect") then origBlurSizes[v] = v.Size end
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  Visual removals — event-driven (no per-frame loop = no flashing)
+--  We hook GetPropertyChangedSignal so we fight the game the instant it reverts.
+-- ─────────────────────────────────────────────────────────────────────────────
+local fogConnections  = {}
+local blurConnections = {}
+
+local function applyFog()
+    Lighting.FogStart = 9e9
+    Lighting.FogEnd   = 9e9
+    local a = Lighting:FindFirstChildOfClass("Atmosphere")
+    if a then a.Density = 0 end
+end
+local function restoreFog()
+    Lighting.FogStart = origFogStart
+    Lighting.FogEnd   = origFogEnd
+    local a = Lighting:FindFirstChildOfClass("Atmosphere")
+    if a and origAtmoDens ~= nil then a.Density = origAtmoDens end
+end
+
+local function hookAtmosphere(a)
+    table.insert(fogConnections, a:GetPropertyChangedSignal("Density"):Connect(function()
+        if tog("NoFog") then a.Density = 0 end
+    end))
+end
+
+local function enableNoFog()
+    applyFog()
+    -- Re-suppress whenever the game reverts these properties
+    table.insert(fogConnections, Lighting:GetPropertyChangedSignal("FogStart"):Connect(function()
+        if tog("NoFog") then Lighting.FogStart = 9e9 end
+    end))
+    table.insert(fogConnections, Lighting:GetPropertyChangedSignal("FogEnd"):Connect(function()
+        if tog("NoFog") then Lighting.FogEnd = 9e9 end
+    end))
+    local a = Lighting:FindFirstChildOfClass("Atmosphere")
+    if a then hookAtmosphere(a) end
+    -- Handle Atmosphere added after the fact
+    table.insert(fogConnections, Lighting.ChildAdded:Connect(function(child)
+        if tog("NoFog") and child:IsA("Atmosphere") then
+            child.Density = 0
+            hookAtmosphere(child)
+        end
+    end))
+end
+local function disableNoFog()
+    for _, c in ipairs(fogConnections) do c:Disconnect() end
+    fogConnections = {}
+    restoreFog()
+end
+
+local function enableNoBlur()
+    for _, v in ipairs(Lighting:GetChildren()) do
+        if v:IsA("BlurEffect") then
+            v.Size = 0
+            table.insert(blurConnections, v:GetPropertyChangedSignal("Size"):Connect(function()
+                if tog("NoBlur") then v.Size = 0 end
+            end))
+        end
+    end
+    table.insert(blurConnections, Lighting.ChildAdded:Connect(function(child)
+        if tog("NoBlur") and child:IsA("BlurEffect") then
+            child.Size = 0
+            table.insert(blurConnections, child:GetPropertyChangedSignal("Size"):Connect(function()
+                if tog("NoBlur") then child.Size = 0 end
+            end))
+        end
+    end))
+end
+local function disableNoBlur()
+    for _, c in ipairs(blurConnections) do c:Disconnect() end
+    blurConnections = {}
+    for v, s in pairs(origBlurSizes) do if v and v.Parent then v.Size = s end end
+end
+
+-- Fullbright
+local origAmbient        = Lighting.Ambient
+local origOutdoorAmbient = Lighting.OutdoorAmbient
+local fullbrightConns    = {}
+
+local function enableFullbright()
+    Lighting.Ambient        = Color3.new(1, 1, 1)
+    Lighting.OutdoorAmbient = Color3.new(1, 1, 1)
+    table.insert(fullbrightConns, Lighting:GetPropertyChangedSignal("Ambient"):Connect(function()
+        if tog("Fullbright") then Lighting.Ambient = Color3.new(1, 1, 1) end
+    end))
+    table.insert(fullbrightConns, Lighting:GetPropertyChangedSignal("OutdoorAmbient"):Connect(function()
+        if tog("Fullbright") then Lighting.OutdoorAmbient = Color3.new(1, 1, 1) end
+    end))
+end
+local function disableFullbright()
+    for _, c in ipairs(fullbrightConns) do c:Disconnect() end
+    fullbrightConns = {}
+    Lighting.Ambient        = origAmbient
+    Lighting.OutdoorAmbient = origOutdoorAmbient
+end
+
+-- Wire up all visual toggles.
+-- Each OnChanged fires on user interaction AND we call the function immediately
+-- so configs loaded from disk (SaveManager) apply on startup without needing
+-- the user to toggle off/on.
+Library.Toggles.NoFog:OnChanged(function(state)
+    if state then enableNoFog() else disableNoFog() end
+end)
+Library.Toggles.NoBlur:OnChanged(function(state)
+    if state then enableNoBlur() else disableNoBlur() end
+end)
+Library.Toggles.NoShadows:OnChanged(function(state)
+    Lighting.GlobalShadows = not state
+end)
+Library.Toggles.Fullbright:OnChanged(function(state)
+    if state then enableFullbright() else disableFullbright() end
+end)
+
+-- Apply immediately on load in case a saved config already has these on
+task.defer(function()
+    if tog("NoFog")      then enableNoFog()      end
+    if tog("NoBlur")     then enableNoBlur()      end
+    if tog("NoShadows")  then Lighting.GlobalShadows = false end
+    if tog("Fullbright") then enableFullbright()  end
+end)
+
+-- Fly
+local flyBV = nil
+local function stopFly()
+    if flyBV then pcall(function() flyBV:Destroy() end); flyBV = nil end
+    local hrp = getHRP(); if not hrp then return end
+    local cm = hrp.Parent and hrp.Parent:FindFirstChild("ControllerManager")
+    if cm then local gc = cm:FindFirstChild("GroundController"); if gc then cm.ActiveController = gc end end
+end
+
+-- NoClip
+local noClipOriginals = {}
+local function applyNoClip(char, on)
+    for _, p in ipairs(char:GetDescendants()) do
+        if p:IsA("BasePart") then
+            if on then
+                if noClipOriginals[p] == nil then noClipOriginals[p] = p.CanCollide end
+                p.CanCollide = false
+            else
+                if noClipOriginals[p] ~= nil then p.CanCollide = noClipOriginals[p]; noClipOriginals[p] = nil end
+            end
+        end
+    end
+end
+
+-- Kill / damage bricks
+local killBrickCFrames   = {}
+local damageBrickParents = {}
+local function trackDesc(d)
+    if not d:IsA("BasePart") then return end
+    local n = d.Name
+    if n == "KillBrick" or n == "KillPlane" or n:match("Chasm") or n == "SuperWall" then
+        killBrickCFrames[d] = d.CFrame
+    end
+    if n == "Lava" and d:FindFirstChild("Hazardous") then damageBrickParents[d] = d.Parent end
+end
+for _, d in ipairs(workspace:GetDescendants()) do pcall(trackDesc, d) end
+workspace.DescendantAdded:Connect(function(d) pcall(trackDesc, d) end)
+workspace.DescendantRemoving:Connect(function(d) killBrickCFrames[d] = nil; damageBrickParents[d] = nil end)
+
+-- Pathfind breaker
+local pbLastVel   = nil
+local pbHighlight = nil
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  ESP SYSTEM
+-- ═════════════════════════════════════════════════════════════════════════════
+
+local espObjects     = {}
+local espConnections = {}
+
+-- ─── Drawing helpers ──────────────────────────────────────────────────────────
+local function newDrawing(type, props)
+    local d = Drawing.new(type)
+    for k, v in pairs(props) do d[k] = v end
+    return d
+end
+
+local function makeESPDrawings()
+    return {
+        -- Name label
+        name = newDrawing("Text", {
+            Size      = 14,
+            Center    = true,
+            Outline   = true,
+            OutlineColor = Color3.new(0, 0, 0),
+            Font      = Drawing.Fonts.UI,
+            Visible   = false,
+            Text      = "",
+            Color     = Color3.new(1, 1, 1),
+        }),
+        -- Distance label (below name)
+        dist = newDrawing("Text", {
+            Size      = 12,
+            Center    = true,
+            Outline   = true,
+            OutlineColor = Color3.new(0, 0, 0),
+            Font      = Drawing.Fonts.UI,
+            Visible   = false,
+            Text      = "",
+            Color     = Color3.new(1, 1, 1),
+        }),
+        -- Bounding box (4 lines forming a 2D rectangle)
+        boxTop    = newDrawing("Line", { Thickness = 1.5, Visible = false, Color = Color3.new(1,1,1) }),
+        boxBottom = newDrawing("Line", { Thickness = 1.5, Visible = false, Color = Color3.new(1,1,1) }),
+        boxLeft   = newDrawing("Line", { Thickness = 1.5, Visible = false, Color = Color3.new(1,1,1) }),
+        boxRight  = newDrawing("Line", { Thickness = 1.5, Visible = false, Color = Color3.new(1,1,1) }),
+        -- Health bar background
+        hpBg = newDrawing("Square", { Filled = true, Visible = false, Color = Color3.fromRGB(20, 20, 20), Transparency = 0.6 }),
+        -- Health bar fill
+        hpFill = newDrawing("Square", { Filled = true, Visible = false, Color = Color3.fromRGB(80, 220, 80) }),
+        -- Tracer (line from bottom of screen to target)
+        tracer = newDrawing("Line", { Thickness = 1, Visible = false, Color = Color3.new(1, 1, 1) }),
+    }
+end
+
+local function hideESPDrawings(d)
+    d.name.Visible    = false
+    d.dist.Visible    = false
+    d.boxTop.Visible  = false
+    d.boxBottom.Visible = false
+    d.boxLeft.Visible = false
+    d.boxRight.Visible = false
+    d.hpBg.Visible    = false
+    d.hpFill.Visible  = false
+    d.tracer.Visible  = false
+end
+
+local function removeDrawings(d)
+    for _, v in pairs(d) do pcall(function() v:Remove() end) end
+end
+
+-- Project a 3D world position to 2D screen position.
+-- Returns screenPos (Vector2), onScreen (bool)
+local function worldToScreen(pos)
+    local camera = workspace.CurrentCamera
+    local sp, vis = camera:WorldToViewportPoint(pos)
+    return Vector2.new(sp.X, sp.Y), vis and sp.Z > 0
+end
+
+-- Get an approximate bounding box in screen space for a character/model.
+-- Returns topLeft (Vector2), bottomRight (Vector2), onScreen (bool)
+local function getModelScreenBounds(part, heightOverride)
+    local camera = workspace.CurrentCamera
+    local height = heightOverride or 5.5
+    local pos    = part.Position
+
+    -- Project top and bottom of the character
+    local top    = pos + Vector3.new(0, height * 0.5, 0)
+    local bottom = pos - Vector3.new(0, height * 0.5, 0)
+
+    local topSP,    topVis    = camera:WorldToViewportPoint(top)
+    local bottomSP, bottomVis = camera:WorldToViewportPoint(bottom)
+
+    if not topVis or not bottomVis or topSP.Z <= 0 or bottomSP.Z <= 0 then
+        return nil, nil, false
+    end
+
+    local screenHeight = bottomSP.Y - topSP.Y
+    local screenWidth  = screenHeight * 0.6  -- approximate aspect ratio
+
+    local centerX = topSP.X
+    local topY    = topSP.Y
+    local botY    = bottomSP.Y
+
+    local tl = Vector2.new(centerX - screenWidth * 0.5, topY)
+    local br = Vector2.new(centerX + screenWidth * 0.5, botY)
+    return tl, br, true
+end
+
+-- ─── ESP object management ────────────────────────────────────────────────────
+local function removeESPFor(instance)
+    for i = #espObjects, 1, -1 do
+        local obj = espObjects[i]
+        if obj.instance == instance then
+            hideESPDrawings(obj.d)
+            removeDrawings(obj.d)
+            table.remove(espObjects, i)
+        end
+    end
+end
+
+local function addESP(instance, getPartFn, category, rawLabel)
+    for _, o in ipairs(espObjects) do if o.instance == instance then return end end
+    local part = getPartFn()
+    if not part then return end
+    local drawings = makeESPDrawings()
+    table.insert(espObjects, {
+        d        = drawings,
+        instance = instance,
+        getPart  = getPartFn,
+        category = category,
+        rawLabel = rawLabel,
+    })
+end
+
+-- Player hooks
+local function hookPlayer(player)
+    if player == LocalPlayer then return end
+    local function gp()
+        local c = player.Character
+        return c and c:FindFirstChild("HumanoidRootPart")
+    end
+    local function tryAdd()
+        if not player.Character then return end
+        addESP(player, gp, "Player", player.Name)
+    end
+    tryAdd()
+    table.insert(espConnections, player.CharacterAdded:Connect(function()
+        removeESPFor(player); task.wait(0.1); tryAdd()
+    end))
+    table.insert(espConnections, player.CharacterRemoving:Connect(function()
+        removeESPFor(player)
+    end))
+end
+
+for _, p in ipairs(Players:GetPlayers()) do hookPlayer(p) end
+table.insert(espConnections, Players.PlayerAdded:Connect(hookPlayer))
+table.insert(espConnections, Players.PlayerRemoving:Connect(function(p) removeESPFor(p) end))
+
+-- NPC name whitelist — these are NPCs not mobs even though they follow the dot/digit pattern.
+-- Add more names here as you find them. Matching is case-insensitive and partial.
+local NPC_NAMES = {
+    "cowardvillager",
+    "coward",
+    "cowardvillagerhaven",
+    "havenvillager",
+    "villager",
+}
+
+local function isNPCName(raw)
+    local lower = raw:lower()
+    -- Strip leading dot and trailing digits to get the base name for matching
+    local base = lower:gsub("^%.", ""):gsub("%d+$", ""):gsub("%s+$", "")
+    for _, n in ipairs(NPC_NAMES) do
+        if base:find(n, 1, true) then return true end
+    end
+    return false
+end
+
+local function hookLiveChild(child)
+    if not child:IsA("Model") then return end
+    if Players:GetPlayerFromCharacter(child) then return end
+
+    -- Categorize: check NPC whitelist first, everything else is a Mob
+    local category = isNPCName(child.Name) and "NPC" or "Mob"
+    local label    = cleanMobName(child.Name)  -- clean applies to both
+
+    -- The HumanoidRootPart may not exist yet when ChildAdded fires for a freshly
+    -- spawning mob — wait up to 2s for it before giving up.
+    task.spawn(function()
+        local hrp = child:FindFirstChild("HumanoidRootPart")
+        if not hrp then
+            hrp = child:WaitForChild("HumanoidRootPart", 2)
+        end
+
+        -- Also accept any BasePart as fallback if still no HRP
+        local function gp()
+            if not child or not child.Parent then return nil end
+            return child:FindFirstChild("HumanoidRootPart")
+                or child:FindFirstChildOfClass("BasePart")
+        end
+
+        if not gp() then return end  -- truly nothing there, skip
+
+        addESP(child, gp, category, label)
+    end)
+end
+
+local function hookLiveFolder(folder)
+    if not folder then return end
+    for _, c in ipairs(folder:GetChildren()) do
+        task.spawn(hookLiveChild, c)
+    end
+    table.insert(espConnections, folder.ChildAdded:Connect(function(c)
+        task.spawn(hookLiveChild, c)
+    end))
+    table.insert(espConnections, folder.ChildRemoved:Connect(function(c)
+        removeESPFor(c)
+    end))
+end
+
+-- Hook existing Live folder and watch for it being added dynamically
+local function tryHookLive()
+    local live = workspace:FindFirstChild("Live")
+    if live then hookLiveFolder(live) end
+end
+tryHookLive()
+workspace.ChildAdded:Connect(function(c)
+    if c.Name == "Live" then hookLiveFolder(c) end
+end)
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  ESP Render Loop
+-- ─────────────────────────────────────────────────────────────────────────────
+RunService.RenderStepped:Connect(function()
+    local myHRP     = getHRP()
+    local camera    = workspace.CurrentCamera
+    local vpSize    = camera.ViewportSize
+    local screenMid = Vector2.new(vpSize.X * 0.5, vpSize.Y)
+
+    for _, obj in ipairs(espObjects) do
+        local cat = obj.category  -- "Player", "Mob", or "NPC"
+
+        -- Which toggle/options to read based on category
+        local espOn, colorKey, nameKey, distKey, hpKey, boxKey, tracerKey, maxDistKey, nameTypeKey
+        if cat == "Player" then
+            espOn       = tog("PlayerESP")
+            colorKey    = "PlayerESPColor"
+            nameKey     = "PlayerESPName"
+            distKey     = "PlayerESPDistance"
+            hpKey       = "PlayerESPHealthBar"
+            boxKey      = "PlayerESPBox"
+            tracerKey   = "PlayerESPTracers"
+            maxDistKey  = "PlayerESPMaxDist"
+            nameTypeKey = "PlayerESPNameType"
+        elseif cat == "Mob" then
+            espOn      = tog("MobESP")
+            colorKey   = "MobESPColor"
+            nameKey    = "MobESPName"
+            distKey    = "MobESPDistance"
+            hpKey      = "MobESPHealthBar"
+            boxKey     = "MobESPBox"
+            tracerKey  = "MobESPTracers"
+            maxDistKey = "MobESPMaxDist"
+        else -- NPC
+            espOn      = tog("NPCESP")
+            colorKey   = "NPCESPColor"
+            nameKey    = "NPCESPName"
+            distKey    = "NPCESPDistance"
+            hpKey      = "NPCESPHealthBar"
+            boxKey     = "NPCESPBox"
+            tracerKey  = "NPCESPTracers"
+            maxDistKey = "NPCESPMaxDist"
+        end
+
+        if not espOn then hideESPDrawings(obj.d); continue end
+
+        local part = obj.getPart and obj.getPart()
+        if not part or not part.Parent then hideESPDrawings(obj.d); continue end
+
+        local maxDist = opt(maxDistKey) or 2000
+        local dist    = myHRP and (myHRP.Position - part.Position).Magnitude or 0
+        if dist > maxDist then hideESPDrawings(obj.d); continue end
+
+        local screenPos, onScreen = worldToScreen(part.Position)
+        if not onScreen then hideESPDrawings(obj.d); continue end
+
+        -- Color
+        local color = opt(colorKey) or Color3.new(1, 1, 1)
+        if cat == "Player" and tog("PlayerESPMarkAllies") then
+            if obj.instance:GetAttribute("Ally") then
+                color = opt("PlayerESPAllyColor") or Color3.fromRGB(80, 200, 80)
+            end
+        end
+
+        -- ── Bounding Box ───────────────────────────────────────────────────
+        local tl, br, boxVisible = getModelScreenBounds(part, 5.5)
+        if tog(boxKey) and boxVisible and tl and br then
+            local tr = Vector2.new(br.X, tl.Y)
+            local bl = Vector2.new(tl.X, br.Y)
+            obj.d.boxTop.From    = tl; obj.d.boxTop.To    = tr
+            obj.d.boxBottom.From = bl; obj.d.boxBottom.To = br
+            obj.d.boxLeft.From   = tl; obj.d.boxLeft.To   = bl
+            obj.d.boxRight.From  = tr; obj.d.boxRight.To  = br
+            for _, ln in ipairs({ obj.d.boxTop, obj.d.boxBottom, obj.d.boxLeft, obj.d.boxRight }) do
+                ln.Color   = color
+                ln.Visible = true
+            end
+        else
+            obj.d.boxTop.Visible    = false
+            obj.d.boxBottom.Visible = false
+            obj.d.boxLeft.Visible   = false
+            obj.d.boxRight.Visible  = false
+        end
+
+        -- ── Health Bar ─────────────────────────────────────────────────────
+        local hpPct = 1
+        if tog(hpKey) then
+            local char = (cat == "Player") and obj.instance.Character or obj.instance
+            local hum  = char and char:FindFirstChildOfClass("Humanoid")
+            if hum then hpPct = math.clamp(hum.Health / math.max(hum.MaxHealth, 1), 0, 1) end
+        end
+
+        if tog(hpKey) and boxVisible and tl and br then
+            local barW = 4
+            local barX = tl.X - barW - 2
+            local barH = br.Y - tl.Y
+            obj.d.hpBg.Position = Vector2.new(barX, tl.Y)
+            obj.d.hpBg.Size     = Vector2.new(barW, barH)
+            obj.d.hpBg.Visible  = true
+            local fillH  = barH * hpPct
+            obj.d.hpFill.Position = Vector2.new(barX, tl.Y + (barH - fillH))
+            obj.d.hpFill.Size     = Vector2.new(barW, fillH)
+            obj.d.hpFill.Color    = Color3.fromRGB(math.floor(255*(1-hpPct)), math.floor(255*hpPct), 0)
+            obj.d.hpFill.Visible  = true
+        else
+            obj.d.hpBg.Visible   = false
+            obj.d.hpFill.Visible = false
+        end
+
+        -- ── Name ───────────────────────────────────────────────────────────
+        if tog(nameKey) then
+            local name = obj.rawLabel
+            if cat == "Player" and nameTypeKey then
+                local nt = opt(nameTypeKey) or 1
+                name = (nt == 2) and obj.instance.Name or (obj.instance.DisplayName or obj.instance.Name)
+            end
+            obj.d.name.Text     = name
+            obj.d.name.Color    = color
+            obj.d.name.Position = Vector2.new(screenPos.X, tl and (tl.Y - 16) or (screenPos.Y - 30))
+            obj.d.name.Visible  = true
+        else
+            obj.d.name.Visible = false
+        end
+
+        -- ── Distance ───────────────────────────────────────────────────────
+        if tog(distKey) then
+            obj.d.dist.Text     = ("[%d]"):format(math.floor(dist))
+            obj.d.dist.Color    = color
+            obj.d.dist.Position = Vector2.new(screenPos.X, br and (br.Y + 2) or (screenPos.Y + 14))
+            obj.d.dist.Visible  = true
+        else
+            obj.d.dist.Visible = false
+        end
+
+        -- ── Tracer ─────────────────────────────────────────────────────────
+        if tog(tracerKey) then
+            obj.d.tracer.From    = screenMid
+            obj.d.tracer.To      = screenPos
+            obj.d.tracer.Color   = color
+            obj.d.tracer.Visible = true
+        else
+            obj.d.tracer.Visible = false
+        end
+    end
+end)
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  EXIT ESP
+--  Static world-position labels per PlaceId. No instance tracking needed —
+--  just project the fixed Vector3 to screen every frame and draw.
+-- ═════════════════════════════════════════════════════════════════════════════
+
+-- { placeId, x, y, z, label }
+local EXIT_DATA = {
+    { 16965267768,      -1754.2,  34.6,  272.6, "Boom Beach Exit"        },
+    { 13769565263,        108.1,  53.5, 1604.7, "Pale District Exit"     },
+    { 13769565263,          3.7,  15.7,  799.2, "Sunset Freeway Exit"    },
+    { 13769565263,        543.5,-197.1,  -78.9, "Windswept Cove Exit"    },
+    { 13769565263,        -40.8, -18.8,    1.1, "Emerald Glen Exit"      },
+    { 13968502857,       3647.6, 708.6,-2747.1, "Windswept Cove Exit"    },
+    { 13968502857,       4884.9, 643.7, -339.3, "Sunset Freeway Exit"    },
+    { 13968502857,       4852.9, 703.7,-2029.7, "Emerald Glen Exit"      },
+    { 15023035886,        890.2, 248.6,-1084.7, "Mist Valley Exit"       },
+    { 15023035886,        938.2, 169.0,-1560.6, "Emerald Glen Exit"      },
+    { 15023035886,        771.6, 166.6,-1606.9, "Boom Beach Exit"        },
+    { 14147726326,        287.0, 104.6,  184.5, "Boom Beach Exit"        },
+    { 14147726326,       -154.4, 208.4, -542.5, "Windswept Cove Exit"    },
+    { 14147726326,       -419.9, 181.9,  150.7, "Mist Valley Exit"       },
+    { 14147726326,       -275.5, 207.6,  508.0, "Emerald Glen Exit"      },
+    { 76385487794583,    1218.3, 254.2,  185.4, "Mist Valley Exit"       },
+    { 76385487794583,    -167.6, 228.9,  554.6, "Boom Beach Exit"        },
+    { 76385487794583,    -302.2,  69.5, -337.0, "Haven Point Exit"       },
+    { 13593513411,       -527.9,  13.0, 1534.8, "Sunset Freeway Exit"    },
+    { 13593513411,       -330.3,  11.2,  326.8, "Shibuya Crossing Exit"  },
+    { 15002638400,       -709.5,   4.1, -462.1, "Haven Point Exit"       },
+    { 15002638400,      -1717.2, -92.0, -275.5, "Under City Drainage"    },
+}
+
+-- Filter to only exits for the current PlaceId
+local currentPlaceId = game.PlaceId
+local activeExits = {}
+for _, e in ipairs(EXIT_DATA) do
+    if e[1] == currentPlaceId then
+        table.insert(activeExits, {
+            pos   = Vector3.new(e[2], e[3], e[4]),
+            label = e[5],
+            -- Drawing objects
+            name   = newDrawing("Text", { Size = 14, Center = true, Outline = true,
+                         OutlineColor = Color3.new(0,0,0), Font = Drawing.Fonts.UI,
+                         Visible = false, Text = e[5], Color = Color3.fromRGB(80,255,180) }),
+            dist   = newDrawing("Text", { Size = 12, Center = true, Outline = true,
+                         OutlineColor = Color3.new(0,0,0), Font = Drawing.Fonts.UI,
+                         Visible = false, Text = "", Color = Color3.fromRGB(80,255,180) }),
+            tracer = newDrawing("Line", { Thickness = 1, Visible = false, Color = Color3.fromRGB(80,255,180) }),
+        })
+    end
+end
+
+-- Exit ESP render loop
+RunService.RenderStepped:Connect(function()
+    if not tog("ExitESP") or #activeExits == 0 then
+        for _, e in ipairs(activeExits) do
+            e.name.Visible   = false
+            e.dist.Visible   = false
+            e.tracer.Visible = false
+        end
+        return
+    end
+
+    local myHRP     = getHRP()
+    local camera    = workspace.CurrentCamera
+    local vpSize    = camera.ViewportSize
+    local screenMid = Vector2.new(vpSize.X * 0.5, vpSize.Y)
+    local maxDist   = opt("ExitESPMaxDist") or 5000
+    local color     = opt("ExitESPColor")   or Color3.fromRGB(80, 255, 180)
+    local showDist  = tog("ExitESPDistance")
+    local LINE_H    = 18  -- pixels per line of text
+
+    -- Track vertical offset per screen position bucket so stacked exits
+    -- don't overlap. Key = "rx,ry" rounded to nearest 4px.
+    local stackOffsets = {}
+
+    for _, e in ipairs(activeExits) do
+        local dist = myHRP and (myHRP.Position - e.pos).Magnitude or 0
+        if dist > maxDist then
+            e.name.Visible   = false
+            e.dist.Visible   = false
+            e.tracer.Visible = false
+            continue
+        end
+
+        local sp, onScreen = worldToScreen(e.pos)
+        if not onScreen then
+            e.name.Visible   = false
+            e.dist.Visible   = false
+            e.tracer.Visible = false
+            continue
+        end
+
+        -- Bucket this screen position to detect duplicates
+        local bx = math.floor(sp.X / 4)
+        local by = math.floor(sp.Y / 4)
+        local key = bx .. "," .. by
+        local slot = stackOffsets[key] or 0
+        stackOffsets[key] = slot + 1
+
+        -- How many lines does this slot take up (name + optional dist)
+        local linesPerEntry = showDist and 2 or 1
+        local yOffset = slot * (linesPerEntry * LINE_H)
+
+        -- Name
+        e.name.Text     = e.label
+        e.name.Color    = color
+        e.name.Position = Vector2.new(sp.X, sp.Y - 10 - yOffset)
+        e.name.Visible  = true
+
+        -- Distance
+        if showDist then
+            e.dist.Text     = ("[%d studs]"):format(math.floor(dist))
+            e.dist.Color    = color
+            e.dist.Position = Vector2.new(sp.X, sp.Y + 6 - yOffset)
+            e.dist.Visible  = true
+        else
+            e.dist.Visible = false
+        end
+
+        -- Tracer (only draw for slot 0 — one tracer per position is enough)
+        if tog("ExitESPTracers") and slot == 0 then
+            e.tracer.From    = screenMid
+            e.tracer.To      = sp
+            e.tracer.Color   = color
+            e.tracer.Visible = true
+        else
+            e.tracer.Visible = false
+        end
+    end
+end)
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  ITEM ESP RENDER LOOP
+-- ─────────────────────────────────────────────────────────────────────────────
+local itemESPObjects = {} -- { [instance] = { name, dist, tracer } }
+
+local function getOrCreateItemDrawings(inst)
+    if itemESPObjects[inst] then return itemESPObjects[inst] end
+    local d = {
+        name   = newDrawing("Text", { Size = 13, Center = true, Outline = true,
+                     OutlineColor = Color3.new(0,0,0), Font = Drawing.Fonts.UI,
+                     Visible = false, Text = "", Color = Color3.new(1,1,1) }),
+        dist   = newDrawing("Text", { Size = 11, Center = true, Outline = true,
+                     OutlineColor = Color3.new(0,0,0), Font = Drawing.Fonts.UI,
+                     Visible = false, Text = "", Color = Color3.new(1,1,1) }),
+        tracer = newDrawing("Line", { Thickness = 1, Visible = false, Color = Color3.new(1,1,1) }),
+    }
+    itemESPObjects[inst] = d
+    return d
+end
+
+local function hideItemDrawings(d)
+    if not d then return end
+    d.name.Visible   = false
+    d.dist.Visible   = false
+    d.tracer.Visible = false
+end
+
+-- Hide ALL item drawings immediately (called when all toggles are off)
+local function hideAllItemESP()
+    for _, d in pairs(itemESPObjects) do hideItemDrawings(d) end
+end
+
+RunService.RenderStepped:Connect(function()
+    local anyOn = tog("CacheESP") or tog("TrinketESP") or tog("VeilESP")
+
+    if not anyOn then
+        hideAllItemESP()
+        return
+    end
+
+    local myHRP      = getHRP()
+    local camera     = workspace.CurrentCamera
+    local vpSize     = camera.ViewportSize
+    local screenMid  = Vector2.new(vpSize.X * 0.5, vpSize.Y)
+    local maxDist    = opt("ItemESPMaxDist") or 3000
+    local showDist   = tog("ItemESPDistance")
+    local showTracer = tog("ItemESPTracers")
+
+    -- Build the full list of active items this frame
+    local activeItems = {} -- { inst, label, color }
+
+    if tog("CacheESP") then
+        local color = opt("CacheESPColor") or Color3.fromRGB(255, 220, 50)
+        local thrown = workspace:FindFirstChild("Thrown")
+        if thrown then
+            for _, v in ipairs(thrown:GetChildren()) do
+                if v:IsA("Model") and v.Name == "itemCacheModel" then
+                    table.insert(activeItems, { inst = v, label = "Cache", color = color })
+                end
+            end
+        end
+    end
+
+    if tog("TrinketESP") then
+        local color = opt("TrinketESPColor") or Color3.fromRGB(180, 100, 255)
+        for _, v in ipairs(workspace:GetChildren()) do
+            if v:IsA("BasePart") and (v.Name == "OreoOre" or v.Name == "Loot") then
+                table.insert(activeItems, { inst = v, label = v.Name, color = color })
+            end
+        end
+    end
+
+    if tog("VeilESP") then
+        local color = opt("VeilESPColor") or Color3.fromRGB(255, 100, 220)
+        local seen = {}
+        for _, v in ipairs(workspace:GetDescendants()) do
+            if v:IsA("Highlight") and v.Name == "VeilHighlight" and v.Parent and v.Parent:IsA("Model") then
+                local model = v.Parent
+                if not seen[model] then
+                    seen[model] = true
+                    table.insert(activeItems, { inst = model, label = "Hidden Curse", color = color })
+                end
+            end
+        end
+    end
+
+    -- Track which instances are visible this frame to hide stale ones
+    local visibleThisFrame = {}
+
+    for _, item in ipairs(activeItems) do
+        local inst = item.inst
+        if not inst or not inst.Parent then continue end
+
+        local pos = getPosition(inst)
+        if not pos then continue end
+
+        local dist = myHRP and (myHRP.Position - pos).Magnitude or 0
+        if dist > maxDist then continue end
+
+        local sp, onScreen = worldToScreen(pos)
+        if not onScreen then continue end
+
+        local d = getOrCreateItemDrawings(inst)
+        visibleThisFrame[inst] = true
+
+        d.name.Text     = item.label
+        d.name.Color    = item.color
+        d.name.Position = Vector2.new(sp.X, sp.Y - 10)
+        d.name.Visible  = true
+
+        if showDist then
+            d.dist.Text     = ("[%d]"):format(math.floor(dist))
+            d.dist.Color    = item.color
+            d.dist.Position = Vector2.new(sp.X, sp.Y + 6)
+            d.dist.Visible  = true
+        else
+            d.dist.Visible = false
+        end
+
+        if showTracer then
+            d.tracer.From    = screenMid
+            d.tracer.To      = sp
+            d.tracer.Color   = item.color
+            d.tracer.Visible = true
+        else
+            d.tracer.Visible = false
+        end
+    end
+
+    -- Immediately hide drawings for anything not in the active list this frame
+    for inst, d in pairs(itemESPObjects) do
+        if not visibleThisFrame[inst] then
+            hideItemDrawings(d)
+        end
+    end
+end)
+
+-- Also hide all item ESP the moment any individual toggle turns off
+Library.Toggles.CacheESP:OnChanged(function(s) if not s then hideAllItemESP() end end)
+Library.Toggles.TrinketESP:OnChanged(function(s) if not s then hideAllItemESP() end end)
+Library.Toggles.VeilESP:OnChanged(function(s) if not s then hideAllItemESP() end end)
+
+-- Windows Virtual Key code for X
+local VK_X = 0x58
+
+-- Press X using every available method simultaneously so it works on any executor
+local function pressX()
+    -- 1. keypress/keyrelease (Synapse X, KRNL, most modern executors — uses Windows VK codes)
+    pcall(function()
+        if isrbxactive and not isrbxactive() then return end
+        keypress(VK_X)
+    end)
+
+    -- 2. VirtualUser (built-in Roblox, works in some executors)
+    pcall(function()
+        local vUser = game:GetService("VirtualUser")
+        vUser:CaptureController()
+        vUser:KeyDown(string.char(VK_X))
+    end)
+
+    task.wait(0.08)
+
+    -- Release both methods
+    pcall(function()
+        if isrbxactive and not isrbxactive() then return end
+        keyrelease(VK_X)
+    end)
+    pcall(function()
+        local vUser = game:GetService("VirtualUser")
+        vUser:KeyUp(string.char(VK_X))
+    end)
+end
+
+-- Fire any ProximityPrompts on a part
+local function firePrompts(part)
+    pcall(function()
+        for _, d in ipairs(part:GetDescendants()) do
+            if d:IsA("ProximityPrompt") then
+                fireproximityprompt(d)
+            end
+        end
+        local pp = part:FindFirstChildOfClass("ProximityPrompt")
+        if pp then fireproximityprompt(pp) end
+    end)
+end
+
+-- Spam X + ProximityPrompts at a part until it disappears or timeout (seconds)
+local function spamCollect(part, toggleKey, timeout)
+    timeout = timeout or 1
+    local deadline = tick() + timeout
+
+    while tick() < deadline and tog(toggleKey) do
+        -- Stop the moment the part is gone — no need to wait out the timeout
+        if not part or not part.Parent then break end
+        firePrompts(part)
+        pressX()
+        task.wait(0.05)
+    end
+
+    -- Always release cleanly on exit
+    pcall(function() keyrelease(VK_X) end)
+    pcall(function()
+        local vUser = game:GetService("VirtualUser")
+        vUser:KeyUp(string.char(VK_X))
+    end)
+end
+
+-- Generic farm loop: rescan every pass, TP to each, spam collect, wait configurable delay
+local function runFarmLoop(toggleKey, scanFn, delayKey, defaultDelay)
+    while true do
+        task.wait(0.05)
+        if not tog(toggleKey) then continue end
+
+        local parts = scanFn()
+
+        if #parts == 0 then
+            task.wait(0.5)
+            continue
+        end
+
+        for _, part in ipairs(parts) do
+            if not tog(toggleKey) then break end
+            if not part or not part.Parent then continue end
+
+            safeTeleport(part.Position)
+            task.wait(0.2) -- settle after teleport
+
+            -- Spam X for up to the delay duration — exits early if part disappears
+            local delay = opt(delayKey) or defaultDelay
+            if part and part.Parent then
+                spamCollect(part, toggleKey, delay)
+            end
+
+            -- Any remaining gap (if part vanished early) — still honour the full delay
+            -- so we don't instantly snap to the next part before the game processes it
+            task.wait(0.1)
+        end
+
+        task.wait(0.1)
+    end
+end
+
+-- ── Auto Loot Farm (workspace.LootFolder > "Loot" parts) ─────────────────────
+task.spawn(function()
+    runFarmLoop(
+        "AutoLoot",
+        function()
+            local t = {}
+            local folder = workspace:FindFirstChild("LootFolder")
+            if folder then
+                for _, v in ipairs(folder:GetChildren()) do
+                    if v:IsA("BasePart") and v.Name == "Loot" then table.insert(t, v) end
+                end
+            end
+            return t
+        end,
+        "AutoLootDelay",
+        0.5
+    )
+end)
+
+-- ── Collect Trinkets (OreoOre + Loot directly in workspace) ──────────────────
+task.spawn(function()
+    runFarmLoop(
+        "AutoTrinkets",
+        function()
+            local t = {}
+            for _, v in ipairs(workspace:GetChildren()) do
+                if v:IsA("BasePart") and (v.Name == "OreoOre" or v.Name == "Loot") then
+                    table.insert(t, v)
+                end
+            end
+            return t
+        end,
+        "AutoTrinketDelay",
+        0.5
+    )
+end)
+
+-- ═════════════════════════════════════════════════════════════════════════════
+--  MAIN FEATURE LOOP
+-- ═════════════════════════════════════════════════════════════════════════════
+RunService.PreSimulation:Connect(function(dt)
+    local char = getChar()
+    local hrp  = getHRP()
+    local hum  = getHuman()
+    local cam  = workspace.CurrentCamera
+
+    -- ── Kill Bricks ────────────────────────────────────────────────────────
+    if tog("NoKillBricks") then
+        for brick in pairs(killBrickCFrames) do
+            if brick and brick.Parent then brick.CFrame = CFrame.new(math.huge, math.huge, math.huge) end
+        end
+    else
+        for brick, cf in pairs(killBrickCFrames) do if brick and brick.Parent then brick.CFrame = cf end end
+    end
+
+    -- ── Damage Bricks ──────────────────────────────────────────────────────
+    if tog("NoDamageBricks") then
+        for brick in pairs(damageBrickParents) do if brick and brick.Parent then brick.Parent = nil end end
+    else
+        for brick, parent in pairs(damageBrickParents) do
+            if brick and not brick.Parent and parent then brick.Parent = parent end
+        end
+    end
+
+    if not char or not hrp then if flyBV then stopFly() end; return end
+
+    -- ── NoClip ─────────────────────────────────────────────────────────────
+    if tog("NoClip") then
+        applyNoClip(char, true)
+        local cm = hrp.Parent and hrp.Parent:FindFirstChild("ControllerManager")
+        if cm then local ac = cm:FindFirstChild("AirController"); if ac then cm.ActiveController = ac end end
+    else
+        applyNoClip(char, false)
+    end
+
+    -- ── Fly ────────────────────────────────────────────────────────────────
+    if tog("Fly") then
+        if not flyBV or not flyBV.Parent then
+            flyBV = Instance.new("BodyVelocity")
+            flyBV.MaxForce = Vector3.new(9e9, 9e9, 9e9)
+            flyBV.Parent   = hrp
+        end
+        local cm = hrp.Parent and hrp.Parent:FindFirstChild("ControllerManager")
+        if cm then local ac = cm:FindFirstChild("AirController"); if ac then cm.ActiveController = ac end end
+
+        local x, z = 0, 0
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) or UserInputService:IsKeyDown(Enum.KeyCode.Up)    then z -= 1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) or UserInputService:IsKeyDown(Enum.KeyCode.Down)  then z += 1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) or UserInputService:IsKeyDown(Enum.KeyCode.Left)  then x -= 1 end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) or UserInputService:IsKeyDown(Enum.KeyCode.Right) then x += 1 end
+
+        local vel = cam.CFrame:VectorToWorldSpace(Vector3.new(x, 0, z) * (opt("FlySpeed") or 200))
+        if UserInputService:IsKeyDown(Enum.KeyCode.Space)       then vel += Vector3.new(0,  opt("FlyUpSpeed") or 150, 0) end
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then vel += Vector3.new(0, -(opt("FlyUpSpeed") or 150), 0) end
+        flyBV.Velocity = vel
+    else
+        if flyBV then stopFly() end
+    end
+
+    -- ── Speedhack ──────────────────────────────────────────────────────────
+    if tog("Speedhack") and not tog("Fly") and hum then
+        hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity * Vector3.new(0, 1, 0)
+        local dir = hum.MoveDirection
+        if dir.Magnitude > 0.001 then hrp.AssemblyLinearVelocity += dir.Unit * (opt("SpeedhackSpeed") or 200) end
+    end
+
+    -- ── CFrame Speed ───────────────────────────────────────────────────────
+    if tog("CFrameSpeed") and not tog("Fly") and hum then
+        local dir = hum.MoveDirection
+        if dir.Magnitude > 0.001 then hrp.CFrame += dir * ((opt("CFrameSpeedMult") or 1) * dt) end
+    end
+
+    -- ── Pathfind Breaker ───────────────────────────────────────────────────
+    if tog("PathfindBreaker") then
+        pbLastVel = hrp.AssemblyLinearVelocity
+        hrp.AssemblyLinearVelocity = tog("AggressiveMode") and Vector3.new(0,-1e5,0) or Vector3.new(0,-9e9,0)
+        if tog("PBHighlight") then
+            if not pbHighlight or not pbHighlight.Parent then
+                pbHighlight = Instance.new("Highlight"); pbHighlight.Parent = char
+            end
+            pbHighlight.FillColor    = opt("PBHighlightColor")        or Color3.fromRGB(200,0,255)
+            pbHighlight.OutlineColor = opt("PBHighlightOutlineColor") or Color3.fromRGB(255,152,234)
+        else
+            if pbHighlight then pbHighlight:Destroy(); pbHighlight = nil end
+        end
+    else
+        pbLastVel = nil
+        if pbHighlight then pbHighlight:Destroy(); pbHighlight = nil end
+    end
+end)
+
+RunService.PreRender:Connect(function()
+    if not pbLastVel then return end
+    local hrp = getHRP(); if hrp then hrp.AssemblyLinearVelocity = pbLastVel end
+end)
+
+-- ─── Infinite Jump ────────────────────────────────────────────────────────────
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp or input.KeyCode ~= Enum.KeyCode.Space then return end
+    if not tog("InfiniteJump") or tog("Fly") then return end
+    local hrp = getHRP(); if not hrp then return end
+    hrp.AssemblyLinearVelocity = hrp.AssemblyLinearVelocity * Vector3.new(1, 0, 1)
+        + Vector3.new(0, opt("InfiniteJumpBoost") or 50, 0)
+end)
+
+-- ─── Auto Curse M1s ───────────────────────────────────────────────────────────
+-- Detects left mouse clicks (M1) via UserInputService.InputBegan.
+-- Fires Curse + E on the first click of a combo, CurseOff after the combo window.
+local VK_E          = 0x45
+local curseActive   = false
+local lastCurseTick = 0
+
+local function getCurseRemotes()
+    local char = getChar()
+    if not char then return nil, nil end
+    local requests = char:FindFirstChild("CharacterHandler")
+                  and char.CharacterHandler:FindFirstChild("Requests")
+    if not requests then return nil, nil end
+    return requests:FindFirstChild("Curse"), requests:FindFirstChild("CurseOff")
+end
+
+local function pressE()
+    pcall(function()
+        if isrbxactive and not isrbxactive() then return end
+        keypress(VK_E)
+    end)
+    pcall(function()
+        local vu = game:GetService("VirtualUser")
+        vu:CaptureController(); vu:KeyDown(string.char(VK_E))
+    end)
+end
+
+local function releaseE()
+    pcall(function()
+        if isrbxactive and not isrbxactive() then return end
+        keyrelease(VK_E)
+    end)
+    pcall(function()
+        local vu = game:GetService("VirtualUser")
+        vu:KeyUp(string.char(VK_E))
+    end)
+end
+
+local function doCurseOff()
+    local _, curseOffR = getCurseRemotes()
+    if curseOffR then pcall(function() curseOffR:FireServer(Players.LocalPlayer) end) end
+    releaseE()
+    curseActive = false
+end
+
+local function doCurse()
+    if not tog("AutoCurse") then return end
+    -- Only trigger on the first M1 of a combo, ignore rapid successive clicks
+    local comboWindow = opt("CurseComboWindow") or 1.5
+    if tick() - lastCurseTick < comboWindow then return end
+    lastCurseTick = tick()
+
+    local curseR, _ = getCurseRemotes()
+    if curseR then pcall(function() curseR:FireServer(Players.LocalPlayer, false) end) end
+    pressE()
+    curseActive = true
+
+    task.delay(comboWindow * 0.9, function()
+        if curseActive then doCurseOff() end
+    end)
+end
+
+-- Listen for left mouse clicks — fires only when the player actually clicks,
+-- not from walking, animations, or any other game logic.
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.UserInputType == Enum.UserInputType.MouseButton1 then
+        doCurse()
+    end
+end)
+
+Library.Toggles.AutoCurse:OnChanged(function(state)
+    if not state and curseActive then doCurseOff() end
+end)
+LocalPlayer.Idled:Connect(function()
+    local VU = game:GetService("VirtualUser"); VU:CaptureController(); VU:ClickButton2(Vector2.new())
+end)
+
+-- ─── Respawn cleanup ──────────────────────────────────────────────────────────
+LocalPlayer.CharacterAdded:Connect(function()
+    noClipOriginals = {}; flyBV = nil; pbLastVel = nil; curseActive = false; lastCurseTick = 0
+    if pbHighlight then pbHighlight:Destroy(); pbHighlight = nil end
+end)
+
+-- ─── Unload cleanup ───────────────────────────────────────────────────────────
+Library.OnUnload = function()
+    disableNoFog()
+    disableNoBlur()
+    disableFullbright()
+    Lighting.GlobalShadows = origShadows
+    for brick, cf in pairs(killBrickCFrames) do if brick and brick.Parent then brick.CFrame = cf end end
+    for brick, parent in pairs(damageBrickParents) do if brick and not brick.Parent and parent then brick.Parent = parent end end
+    local c = getChar(); if c then applyNoClip(c, false) end
+    if flyBV then stopFly() end
+    if pbHighlight then pbHighlight:Destroy(); pbHighlight = nil end
+    for _, obj in ipairs(espObjects) do hideESPDrawings(obj.d); removeDrawings(obj.d) end
+    espObjects = {}
+    for _, conn in ipairs(espConnections) do conn:Disconnect() end
+    espConnections = {}
+    -- Destroy exit ESP drawings
+    for _, e in ipairs(activeExits) do
+        pcall(function() e.name:Remove() end)
+        pcall(function() e.dist:Remove() end)
+        pcall(function() e.tracer:Remove() end)
+    end
+    -- Destroy item ESP drawings
+    for _, d in pairs(itemESPObjects) do
+        pcall(function() d.name:Remove() end)
+        pcall(function() d.dist:Remove() end)
+        pcall(function() d.tracer:Remove() end)
+    end
+    itemESPObjects = {}
+    print("[Leaf Hub] Unloaded.")
+end
+
+-- ─────────────────────────────────────────────────────────────────────────────
+--  DONE
+-- ─────────────────────────────────────────────────────────────────────────────
+print("[Leaf Hub] Loaded — Cursed Gear Build v1.0.0")
+
+end) -- end task.spawn
