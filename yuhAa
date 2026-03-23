@@ -1,16 +1,20 @@
 --[[
-    Leaf Hub | Cursed Gear Build v1.3.3
+    Leaf Hub | Cursed Gear Build v1.0.0
     UI: Obsidian (https://github.com/deividcomsono/Obsidian)
 ]]
 
 -- ─────────────────────────────────────────────────────────────────────────────
---  DUPLICATE RUN GUARD — prevents double execution if script loads twice
+--  DUPLICATE RUN GUARD
 -- ─────────────────────────────────────────────────────────────────────────────
 if shared.__LeafHubRunning then return end
 shared.__LeafHubRunning = true
 
 -- ─────────────────────────────────────────────────────────────────────────────
---  TELEPORT PERSISTENCE (based on Infinite Yield's approach)
+--  TELEPORT PERSISTENCE
+--  Key insight: OnTeleport connections from previous place loads survive in
+--  getgenv(). We disconnect the old one before making a new one so there's
+--  never more than one listener active. This prevents double-queuing and
+--  ensures the chain works every single teleport.
 -- ─────────────────────────────────────────────────────────────────────────────
 local SCRIPT_URL = "https://raw.githubusercontent.com/ymmotnova7/suretg/refs/heads/main/yuhAa"
 
@@ -19,20 +23,39 @@ pcall(function() if queue_on_teleport then queueFn = queue_on_teleport end end)
 pcall(function() if not queueFn and syn and syn.queue_on_teleport then queueFn = syn.queue_on_teleport end end)
 pcall(function() if not queueFn and fluxus and fluxus.queue_on_teleport then queueFn = fluxus.queue_on_teleport end end)
 
-local teleportCheck = false
-local Players_ = game:GetService("Players")
-local LocalPlayer_ = Players_.LocalPlayer or Players_:GetPropertyChangedSignal("LocalPlayer"):Wait() and Players_.LocalPlayer
-if LocalPlayer_ then
-    LocalPlayer_.OnTeleport:Connect(function()
-        -- Use teleportCheck to only queue once per teleport event, but wrap
-        -- in pcall and reset via task.delay so it fires fresh on next teleport
-        if not teleportCheck and queueFn then
-            teleportCheck = true
-            pcall(queueFn, "shared.__LeafHubRunning=nil;shared.__LeafHubAutoload=true;shared.__LeafHubRaidActive=" .. tostring(shared.__LeafHubRaidActive or false) .. ";loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()")
-            -- Reset after a moment so if the teleport is cancelled it can retry
-            task.delay(3, function() teleportCheck = false end)
-        end
-    end)
+if queueFn then
+    -- Disconnect any stale OnTeleport connection from previous place loads
+    local genv = nil
+    pcall(function() genv = getgenv() end)
+    if genv and genv.__LeafHubTPConn then
+        pcall(function() genv.__LeafHubTPConn:Disconnect() end)
+        genv.__LeafHubTPConn = nil
+    end
+
+    local lp = game:GetService("Players").LocalPlayer
+    if not lp then
+        pcall(function()
+            game:GetService("Players"):GetPropertyChangedSignal("LocalPlayer"):Wait()
+            lp = game:GetService("Players").LocalPlayer
+        end)
+    end
+
+    if lp then
+        local queued = false
+        local conn = lp.OnTeleport:Connect(function()
+            if not queued then
+                queued = true
+                pcall(queueFn,
+                    "shared.__LeafHubRunning=nil;" ..
+                    "shared.__LeafHubAutoload=true;" ..
+                    "shared.__LeafHubRaidActive=" .. tostring(shared.__LeafHubRaidActive or false) .. ";" ..
+                    "loadstring(game:HttpGet('" .. SCRIPT_URL .. "'))()"
+                )
+            end
+        end)
+        -- Store in getgenv so next place load can disconnect it
+        if genv then genv.__LeafHubTPConn = conn end
+    end
 end
 
 -- ─────────────────────────────────────────────────────────────────────────────
