@@ -6,7 +6,7 @@
 -- ─────────────────────────────────────────────────────────────────────────────
 --  TELEPORT PERSISTENCE (based on Infinite Yield's approach)
 -- ─────────────────────────────────────────────────────────────────────────────
-local SCRIPT_URL = "https://pastebin.com/raw/ajMg4dSX"
+local SCRIPT_URL = "https://raw.githubusercontent.com/ymmotnova7/suretg/refs/heads/main/yuh"
 
 local queueFn = nil
 pcall(function() if queue_on_teleport then queueFn = queue_on_teleport end end)
